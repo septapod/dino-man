@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Dino-Man</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+    color: #fff;
+    user-select: none;
+  }
+  h1 { font-size: 2rem; color: #4ade80; letter-spacing: 4px; margin-bottom: 8px; text-shadow: 0 0 20px #4ade80; }
+  #hud { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px 28px; margin-bottom: 8px; font-size: 0.9rem; letter-spacing: 2px; }
+  #hud span { color: #fde047; }
+  canvas { border: 2px solid #222; display: block; touch-action: none; }
+  #sub { margin-top: 8px; font-size: 0.75rem; color: #444; letter-spacing: 2px; }
+  #dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 64px);
+    grid-template-rows: repeat(3, 64px);
+    gap: 4px;
+    margin-top: 10px;
+  }
+  #dpad button {
+    background: rgba(255,255,255,0.1);
+    border: 2px solid #333;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 1.4rem;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    user-select: none;
+  }
+  #dpad button:active { background: rgba(255,255,255,0.3); border-color: #4ade80; }
+  .dpad-blank { background: none; border: none; }
+</style>
+</head>
+<body>
+<h1>DINO-MAN</h1>
+<div id="hud">
+  <div>SCORE: <span id="score">0</span></div>
+  <div>BEST: <span id="best">0</span></div>
+  <div>LIVES: <span id="lives">***</span></div>
+  <div>LEVEL: <span id="level">1</span></div>
+</div>
+<canvas id="c"></canvas>
+<div id="dpad">
+  <div class="dpad-blank"></div>
+  <button id="btn-up"    aria-label="Up">▲</button>
+  <div class="dpad-blank"></div>
+  <button id="btn-left"  aria-label="Left">◀</button>
+  <div class="dpad-blank"></div>
+  <button id="btn-right" aria-label="Right">▶</button>
+  <div class="dpad-blank"></div>
+  <button id="btn-down"  aria-label="Down">▼</button>
+  <div class="dpad-blank"></div>
+</div>
+<div id="sub">ARROWS / WASD &nbsp;|&nbsp; ENTER TO START</div>
+
+<script>
+'use strict';
+
+// ---- CONSTANTS ----
+let TILE = 24, HALF = 12;
+const ROWS = 21, COLS = 21;
+const WALL = 1, EMPTY = 0, DOT = 2, PELLET = 3;
+const PSPEED = 2, CSPEED = 1.4, ROCKSPD = 4;
+const POWER_FRAMES = 300;
+const TAU = Math.PI * 2;
+
+// ---- CANVAS ----
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+  const maxW = window.innerWidth - 8;
+  const maxH = window.innerHeight * 0.72;
+  TILE = Math.max(12, Math.floor(Math.min(maxW, maxH) / COLS));
+  HALF = TILE >> 1;
+  canvas.width  = COLS * TILE;
+  canvas.height = ROWS * TILE;
+  if (typeof player !== 'undefined') {
+    initPlayer();
+    if (typeof cavemen !== 'undefined') { initCavemen(); rocks = []; }
+  }
+}
+window.addEventListener('resize', resizeCanvas);
+
+// ---- MAZE ----
+const MT = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,2,2,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,1],
+  [1,3,1,1,2,1,1,1,2,1,1,1,2,1,1,1,2,1,1,3,1],
+  [1,2,1,1,2,1,1,1,2,1,1,1,2,1,1,1,2,1,1,2,1],
+  [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1],
+  [1,2,1,1,2,1,2,1,1,1,1,1,1,1,2,1,2,1,1,2,1],
+  [1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1],
+  [1,1,1,1,2,1,1,1,0,1,1,1,0,1,1,1,2,1,1,1,1],
+  [1,1,1,1,2,1,0,0,0,0,0,0,0,0,0,1,2,1,1,1,1],
+  [1,1,1,1,2,1,0,1,1,0,0,0,1,1,0,1,2,1,1,1,1],
+  [0,0,0,0,2,0,0,1,0,0,0,0,0,1,0,0,2,0,0,0,0],
+  [1,1,1,1,2,1,0,1,1,1,1,1,1,1,0,1,2,1,1,1,1],
+  [1,1,1,1,2,1,0,0,0,0,0,0,0,0,0,1,2,1,1,1,1],
+  [1,1,1,1,2,1,0,1,1,1,1,1,1,1,0,1,2,1,1,1,1],
+  [1,2,2,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,1],
+  [1,2,1,1,2,1,1,1,2,1,1,1,2,1,1,1,2,1,1,2,1],
+  [1,3,2,1,2,2,2,2,2,2,0,2,2,2,2,2,2,1,2,3,1],
+  [1,1,2,1,2,1,2,1,1,1,1,1,1,1,2,1,2,1,2,1,1],
+  [1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1],
+  [1,2,1,1,1,1,1,1,2,1,1,1,2,1,1,1,1,1,1,2,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+];
+
+// ---- STATE ----
+let maze, player, cavemen, rocks;
+let score = 0, best = 0, lives = 3, level = 1;
+let powerTimer = 0, pelletTick = 0, totalDots = 0;
+let state = 'title'; // title | playing | death | levelwin | gameover
+let deathFrames = 0;
+
+// ---- HUD ----
+const $score = document.getElementById('score');
+const $best  = document.getElementById('best');
+const $lives = document.getElementById('lives');
+const $level = document.getElementById('level');
+function hud() {
+  $score.textContent = score;
+  $best.textContent  = best;
+  $lives.textContent = '*'.repeat(Math.max(0, lives));
+  $level.textContent = level;
+}
+
+// ---- INPUT ----
+const keys = {};
+const DIRS = {
+  ArrowLeft:{dx:-1,dy:0}, ArrowRight:{dx:1,dy:0},
+  ArrowUp:{dx:0,dy:-1},   ArrowDown:{dx:0,dy:1},
+  a:{dx:-1,dy:0}, d:{dx:1,dy:0}, w:{dx:0,dy:-1}, s:{dx:0,dy:1},
+};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (DIRS[e.key]) e.preventDefault();
+  if (e.key === 'Enter' && (state === 'title' || state === 'gameover')) startGame();
+});
+window.addEventListener('keyup', e => { delete keys[e.key]; });
+
+// ---- D-PAD ----
+const dpadMap = {
+  'btn-up':    {dx:0,  dy:-1},
+  'btn-down':  {dx:0,  dy:1},
+  'btn-left':  {dx:-1, dy:0},
+  'btn-right': {dx:1,  dy:0},
+};
+for (const [id, dir] of Object.entries(dpadMap)) {
+  const btn = document.getElementById(id);
+  const fire = e => { if (player) player.next = dir; e.preventDefault(); };
+  btn.addEventListener('touchstart', fire, {passive: false});
+  btn.addEventListener('mousedown',  fire);
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+}
+
+// ---- TOUCH / SWIPE ----
+let swipeX = 0, swipeY = 0;
+canvas.addEventListener('touchstart', e => {
+  swipeX = e.touches[0].clientX;
+  swipeY = e.touches[0].clientY;
+  e.preventDefault();
+}, {passive: false});
+canvas.addEventListener('touchend', e => {
+  const dx = e.changedTouches[0].clientX - swipeX;
+  const dy = e.changedTouches[0].clientY - swipeY;
+  const THRESH = 20;
+  if (Math.abs(dx) > THRESH || Math.abs(dy) > THRESH) {
+    if (!player) return;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      player.next = dx > 0 ? {dx:1,dy:0} : {dx:-1,dy:0};
+    } else {
+      player.next = dy > 0 ? {dx:0,dy:1} : {dx:0,dy:-1};
+    }
+  } else {
+    if (state === 'title' || state === 'gameover') startGame();
+  }
+  e.preventDefault();
+}, {passive: false});
+canvas.addEventListener('touchmove', e => { e.preventDefault(); }, {passive: false});
+
+// ---- HELPERS ----
+function tileAt(r, c) {
+  if (r < 0 || r >= ROWS) return WALL;
+  if (c < 0 || c >= COLS) return EMPTY; // horizontal tunnel
+  return maze[r][c];
+}
+function walkable(r, c) { return tileAt(r, c) !== WALL; }
+// pixel coords -> tile index (player center-based)
+function tR(y) { return Math.floor(y / TILE); }
+function tC(x) { return Math.floor(x / TILE); }
+// snap pixel to nearest tile center
+function snap(v) { return Math.round((v - HALF) / TILE) * TILE + HALF; }
+// is pixel at a tile center (within PSPEED)
+function atSnap(v) { return ((v - HALF + TILE * 100) % TILE) < PSPEED; }
+// wrap horizontal tunnel
+function wrapX(x) {
+  const W = COLS * TILE;
+  if (x < -HALF) return x + W;
+  if (x > W + HALF) return x - W;
+  return x;
+}
+function mdist(r1,c1,r2,c2) { return Math.abs(r1-r2)+Math.abs(c1-c2); }
+
+// ---- INIT ----
+function initMaze() {
+  maze = MT.map(r => [...r]);
+  totalDots = 0;
+  for (let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++)
+    if (maze[r][c]===DOT||maze[r][c]===PELLET) totalDots++;
+}
+
+function mkPt(r,c) { return { x: c*TILE+HALF, y: r*TILE+HALF }; }
+
+function initPlayer() {
+  const p = mkPt(16, 10);
+  player = { x:p.x, y:p.y, dir:{dx:0,dy:0}, next:{dx:1,dy:0}, chomp:0 };
+}
+
+const CM_STARTS = [{r:9,c:9},{r:9,c:11},{r:10,c:10},{r:12,c:10}];
+const CM_SKIN   = ['#d4956a','#c8a882','#e8a870','#b87050'];
+const CM_SCATTER= [{r:0,c:COLS-1},{r:0,c:0},{r:ROWS-1,c:COLS-1},{r:ROWS-1,c:0}];
+
+function initCavemen() {
+  cavemen = CM_STARTS.map((s,i) => {
+    const p = mkPt(s.r, s.c);
+    return {
+      x:p.x, y:p.y, r:s.r, c:s.c,
+      dir:{dx:i%2?1:-1, dy:0},
+      skin: CM_SKIN[i], scared:false, dead:false,
+      rockCd: 90 + i*50, wobble:0,
+      scatter: CM_SCATTER[i],
+      homeR:s.r, homeC:s.c, respawn:0,
+    };
+  });
+}
+
+function startGame() {
+  initMaze(); initPlayer(); initCavemen();
+  rocks=[]; score=0; lives=3; level=1; powerTimer=0; pelletTick=0;
+  state='playing'; hud();
+}
+
+function resetRound() {
+  initPlayer(); initCavemen(); rocks=[]; powerTimer=0; state='playing';
+}
+
+// ---- PLAYER MOVEMENT (tile-center snapping) ----
+function updatePlayer() {
+  // Poll held keys every frame for responsive turning
+  for (const [k,d] of Object.entries(DIRS)) {
+    if (keys[k]) { player.next = d; break; }
+  }
+
+  const ax = atSnap(player.x), ay = atSnap(player.y);
+
+  if (ax && ay) {
+    player.x = snap(player.x);
+    player.y = snap(player.y);
+    const r = tR(player.y), c = tC(player.x);
+
+    // Try queued direction
+    const n = player.next;
+    if (walkable(r + n.dy, c + n.dx)) player.dir = {dx:n.dx, dy:n.dy};
+
+    // Stop if wall ahead
+    const d = player.dir;
+    if (!walkable(r + d.dy, c + d.dx)) { player.dir = {dx:0,dy:0}; return; }
+  }
+
+  player.x = wrapX(player.x + player.dir.dx * PSPEED);
+  player.y += player.dir.dy * PSPEED;
+
+  // Chomp animation
+  if (player.dir.dx || player.dir.dy) player.chomp = (player.chomp + 1) % 20;
+
+  // Eat
+  const r = tR(player.y), c = tC(player.x);
+  if (r>=0&&r<ROWS&&c>=0&&c<COLS) {
+    if (maze[r][c] === DOT) {
+      maze[r][c] = EMPTY; score += 10; totalDots--; hud();
+    } else if (maze[r][c] === PELLET) {
+      maze[r][c] = EMPTY; score += 50; totalDots--;
+      powerTimer = POWER_FRAMES;
+      rocks = [];
+      cavemen.forEach(cm => { if (!cm.dead) cm.scared = true; });
+      hud();
+    }
+  }
+
+  if (totalDots <= 0) nextLevel();
+}
+
+// ---- CAVEMAN AI ----
+function neighbors(r, c, exclude) {
+  return [{r:r-1,c,dx:0,dy:-1},{r:r+1,c,dx:0,dy:1},
+          {r,c:c-1,dx:-1,dy:0},{r,c:c+1,dx:1,dy:0}]
+    .filter(n => walkable(n.r,n.c) && !(n.dx===-exclude.dx&&n.dy===-exclude.dy));
+}
+
+function lineOfSight(cm) {
+  const gr=cm.r, gc=cm.c, pr=tR(player.y), pc=tC(player.x);
+  const d = mdist(gr,gc,pr,pc);
+  if (d < 2 || d > 10) return null;
+  if (gr === pr) {
+    const dir = Math.sign(pc-gc);
+    for (let cc=gc+dir; cc!==pc; cc+=dir) if (!walkable(gr,cc)) return null;
+    return {dx:dir,dy:0};
+  }
+  if (gc === pc) {
+    const dir = Math.sign(pr-gr);
+    for (let rr=gr+dir; rr!==pr; rr+=dir) if (!walkable(rr,gc)) return null;
+    return {dx:0,dy:dir};
+  }
+  return null;
+}
+
+function updateCaveman(cm) {
+  if (cm.dead) {
+    cm.respawn--;
+    if (cm.respawn <= 0) {
+      const p = mkPt(cm.homeR, cm.homeC);
+      cm.x=p.x; cm.y=p.y; cm.r=cm.homeR; cm.c=cm.homeC;
+      cm.dir={dx:1,dy:0}; cm.dead=false; cm.scared=false;
+    }
+    return;
+  }
+
+  const spd = cm.scared ? CSPEED*0.6 : CSPEED*(1+(level-1)*0.12);
+  cm.x = wrapX(cm.x + cm.dir.dx * spd);
+  cm.y += cm.dir.dy * spd;
+  cm.wobble++;
+  cm.rockCd--;
+
+  if (atSnap(cm.x) && atSnap(cm.y)) {
+    cm.x = snap(cm.x); cm.y = snap(cm.y);
+    cm.r = tR(cm.y); cm.c = tC(cm.x);
+
+    const opts = neighbors(cm.r, cm.c, cm.dir);
+    if (opts.length === 0) { cm.dir={dx:-cm.dir.dx,dy:-cm.dir.dy}; return; }
+
+    if (cm.scared) {
+      cm.dir = opts[opts.length * Math.random() | 0];
+    } else {
+      const pr=tR(player.y), pc=tC(player.x);
+      const target = Math.random()<0.8 ? {r:pr,c:pc} : cm.scatter;
+      cm.dir = opts.reduce((a,b)=>mdist(a.r,a.c,target.r,target.c)<mdist(b.r,b.c,target.r,target.c)?a:b);
+    }
+
+    // Try to throw a rock
+    if (!cm.scared && cm.rockCd <= 0) {
+      const los = lineOfSight(cm);
+      if (los) {
+        rocks.push({x:cm.x, y:cm.y, vx:los.dx*ROCKSPD, vy:los.dy*ROCKSPD, life:150});
+        cm.rockCd = 160 + (Math.random()*80|0);
+      } else {
+        cm.rockCd = 25;
+      }
+    }
+  }
+}
+
+// ---- ROCKS ----
+function updateRocks() {
+  for (let i=rocks.length-1; i>=0; i--) {
+    const rock = rocks[i];
+    rock.x += rock.vx; rock.y += rock.vy; rock.life--;
+    if (rock.life<=0 || tileAt(tR(rock.y),tC(rock.x))===WALL) { rocks.splice(i,1); continue; }
+    const dx=rock.x-player.x, dy=rock.y-player.y;
+    if (Math.sqrt(dx*dx+dy*dy) < TILE*0.45) { rocks.splice(i,1); playerHit(); return; }
+  }
+}
+
+// ---- COLLISIONS ----
+function checkCaveman() {
+  for (const cm of cavemen) {
+    if (cm.dead) continue;
+    const dx=cm.x-player.x, dy=cm.y-player.y;
+    if (Math.sqrt(dx*dx+dy*dy) < TILE*0.62) {
+      if (cm.scared) {
+        cm.dead=true; cm.scared=false; cm.respawn=180;
+        score+=200; hud();
+      } else {
+        playerHit();
+        return;
+      }
+    }
+  }
+}
+
+function playerHit() {
+  if (state !== 'playing') return;
+  lives--;
+  if (score > best) best = score;
+  hud();
+  state = 'death';
+  deathFrames = 90;
+}
+
+function nextLevel() {
+  level++;
+  state = 'levelwin';
+  setTimeout(() => {
+    initMaze(); initPlayer(); initCavemen(); rocks=[]; powerTimer=0;
+    hud(); state='playing';
+  }, 2200);
+}
+
+// ============================================================
+// DRAWING
+// ============================================================
+
+function drawMaze() {
+  for (let r=0;r<ROWS;r++) {
+    for (let c=0;c<COLS;c++) {
+      const x=c*TILE, y=r*TILE, cell=maze[r][c];
+      if (cell === WALL) {
+        ctx.fillStyle = '#0e2244';
+        ctx.fillRect(x,y,TILE,TILE);
+        ctx.strokeStyle='#1d4ed8'; ctx.lineWidth=2;
+        const sides=[
+          {dr:-1,dc:0,x1:x,y1:y,x2:x+TILE,y2:y},
+          {dr:1, dc:0,x1:x,y1:y+TILE,x2:x+TILE,y2:y+TILE},
+          {dr:0, dc:-1,x1:x,y1:y,x2:x,y2:y+TILE},
+          {dr:0, dc:1, x1:x+TILE,y1:y,x2:x+TILE,y2:y+TILE},
+        ];
+        for(const s of sides){if(tileAt(r+s.dr,c+s.dc)!==WALL){ctx.beginPath();ctx.moveTo(s.x1,s.y1);ctx.lineTo(s.x2,s.y2);ctx.stroke();}}
+      } else {
+        ctx.fillStyle='#06060f'; ctx.fillRect(x,y,TILE,TILE);
+        if (cell===DOT) {
+          ctx.fillStyle='#fde047';
+          ctx.beginPath(); ctx.arc(x+HALF,y+HALF,2.5,0,TAU); ctx.fill();
+        } else if (cell===PELLET && Math.sin(pelletTick*0.13)>0) {
+          ctx.fillStyle='#ff0'; ctx.shadowColor='#ff0'; ctx.shadowBlur=14;
+          ctx.beginPath(); ctx.arc(x+HALF,y+HALF,6.5,0,TAU); ctx.fill();
+          ctx.shadowBlur=0;
+        }
+      }
+    }
+  }
+}
+
+// Draw a proper T-Rex facing RIGHT; we rotate/flip for other directions
+function drawDino(x, y, dir, chomp) {
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Transform based on direction
+  if (dir.dx < 0) {
+    ctx.scale(-1, 1); // flip for left
+  } else if (dir.dy < 0) {
+    ctx.rotate(-Math.PI/2); // up
+  } else if (dir.dy > 0) {
+    ctx.rotate(Math.PI/2);  // down
+  }
+  // dir.dx > 0 or stationary: no transform
+
+  const s = TILE * 0.44;
+  const mouthOpen = Math.sin(chomp * Math.PI / 10) > 0;
+  const jawY = mouthOpen ? s*0.28 : s*0.06;
+
+  // --- TAIL ---
+  ctx.fillStyle = '#16a34a';
+  ctx.beginPath();
+  ctx.moveTo(-s*0.65, s*0.1);
+  ctx.quadraticCurveTo(-s*1.25, s*0.05, -s*1.7, -s*0.5);
+  ctx.quadraticCurveTo(-s*1.25, -s*0.05, -s*0.72, s*0.0);
+  ctx.closePath();
+  ctx.fill();
+
+  // --- DORSAL SPIKES ---
+  ctx.fillStyle = '#15803d';
+  const spkX = [-s*0.55, -s*0.22, s*0.1, s*0.37];
+  for (const bx of spkX) {
+    ctx.beginPath();
+    ctx.moveTo(bx-s*0.1, -s*0.52);
+    ctx.lineTo(bx,       -s*1.02);
+    ctx.lineTo(bx+s*0.1, -s*0.52);
+    ctx.fill();
+  }
+
+  // --- BODY ---
+  ctx.fillStyle = '#4ade80';
+  ctx.beginPath();
+  ctx.ellipse(-s*0.1, s*0.06, s*0.75, s*0.52, 0, 0, TAU);
+  ctx.fill();
+
+  // belly
+  ctx.fillStyle = '#86efac';
+  ctx.beginPath();
+  ctx.ellipse(-s*0.05, s*0.18, s*0.4, s*0.3, 0, 0, TAU);
+  ctx.fill();
+
+  // --- NECK ---
+  ctx.fillStyle = '#4ade80';
+  ctx.beginPath();
+  ctx.moveTo(s*0.38, -s*0.3);
+  ctx.quadraticCurveTo(s*0.62, -s*0.52, s*0.8, -s*0.6);
+  ctx.quadraticCurveTo(s*0.9, -s*0.42, s*0.68, -s*0.22);
+  ctx.quadraticCurveTo(s*0.52, -s*0.1, s*0.38, -s*0.3);
+  ctx.fill();
+
+  // --- UPPER JAW ---
+  ctx.fillStyle = '#4ade80';
+  ctx.beginPath();
+  ctx.ellipse(s*0.9, -s*0.67, s*0.42, s*0.26, -0.18, 0, TAU);
+  ctx.fill();
+
+  // upper teeth
+  ctx.fillStyle = '#e5e7eb';
+  for (let i=0; i<4; i++) {
+    const tx = s*0.62 + i*s*0.18;
+    ctx.beginPath();
+    ctx.moveTo(tx,        -s*0.55);
+    ctx.lineTo(tx+s*0.07, -s*0.44);
+    ctx.lineTo(tx+s*0.14, -s*0.55);
+    ctx.fill();
+  }
+
+  // nostril
+  ctx.fillStyle = '#16a34a';
+  ctx.beginPath();
+  ctx.arc(s*1.26, -s*0.65, s*0.065, 0, TAU);
+  ctx.fill();
+
+  // --- LOWER JAW (opens/closes) ---
+  ctx.fillStyle = '#22c55e';
+  ctx.beginPath();
+  ctx.ellipse(s*0.84, -s*0.47 + jawY, s*0.36, s*0.16, 0.15, 0, TAU);
+  ctx.fill();
+
+  // lower teeth (only when open)
+  if (mouthOpen) {
+    ctx.fillStyle = '#d1fae5';
+    for (let i=0; i<3; i++) {
+      const tx = s*0.66 + i*s*0.2;
+      ctx.beginPath();
+      ctx.moveTo(tx,        -s*0.43 + jawY);
+      ctx.lineTo(tx+s*0.07, -s*0.54 + jawY);
+      ctx.lineTo(tx+s*0.14, -s*0.43 + jawY);
+      ctx.fill();
+    }
+  }
+
+  // --- EYE ---
+  ctx.fillStyle = '#fef9c3';
+  ctx.beginPath();
+  ctx.arc(s*0.78, -s*0.84, s*0.19, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = '#111';
+  ctx.beginPath();
+  ctx.arc(s*0.83, -s*0.82, s*0.11, 0, TAU);
+  ctx.fill();
+  // slit pupil
+  ctx.fillStyle = '#f97316';
+  ctx.beginPath();
+  ctx.ellipse(s*0.83, -s*0.82, s*0.04, s*0.09, 0, 0, TAU);
+  ctx.fill();
+  // shine
+  ctx.fillStyle='rgba(255,255,255,0.8)';
+  ctx.beginPath();
+  ctx.arc(s*0.79, -s*0.87, s*0.045, 0, TAU);
+  ctx.fill();
+
+  // --- TINY T-REX ARM ---
+  ctx.strokeStyle='#22c55e'; ctx.lineWidth=s*0.17; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(s*0.46, s*0.06); ctx.lineTo(s*0.68, s*0.3); ctx.stroke();
+  // claws
+  ctx.lineWidth=s*0.09;
+  ctx.beginPath(); ctx.moveTo(s*0.68,s*0.3); ctx.lineTo(s*0.61,s*0.42); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(s*0.68,s*0.3); ctx.lineTo(s*0.76,s*0.41); ctx.stroke();
+
+  ctx.restore();
+}
+
+// Draw caveman facing camera (front view) — flipped for leftward movement
+function drawCaveman(cm, overrideX, overrideY) {
+  if (cm.dead) return;
+  const cx = overrideX !== undefined ? overrideX : cm.x;
+  const cy = overrideY !== undefined ? overrideY : cm.y;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  if (cm.scared) {
+    const wb = Math.sin(cm.wobble * 0.35) * 2.5;
+    ctx.translate(wb, 0);
+  }
+
+  const s = TILE * 0.43;
+  const flash = cm.scared && powerTimer < 90 && Math.sin(pelletTick * 0.45) > 0;
+  const skin  = flash ? '#fff'     : cm.skin;
+  const fur   = flash ? '#aaa'     : '#5c3d1e';
+  const hair  = flash ? '#eee'     : '#180a00';
+
+  // feet
+  ctx.fillStyle = skin;
+  ctx.beginPath(); ctx.ellipse(-s*0.22, s*0.92, s*0.17, s*0.1, -0.3, 0, TAU); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( s*0.22, s*0.92, s*0.17, s*0.1,  0.3, 0, TAU); ctx.fill();
+
+  // fur tunic body
+  ctx.fillStyle = fur;
+  ctx.beginPath();
+  ctx.ellipse(0, s*0.18, s*0.52, s*0.7, 0, 0, TAU);
+  ctx.fill();
+
+  // fur spots
+  if (!flash) {
+    ctx.fillStyle='#3d2810';
+    const spots=[[-.28,-.22,.11],[.22,-.05,.1],[-.15,.32,.09],[.2,.28,.08]];
+    for(const[sx,sy,sr] of spots){ctx.beginPath();ctx.arc(s*sx,s*sy,s*sr,0,TAU);ctx.fill();}
+  }
+
+  // eyebrow ridge
+  ctx.fillStyle = fur;
+  ctx.beginPath(); ctx.ellipse(0,-s*0.88,s*0.38,s*0.1,0,0,TAU); ctx.fill();
+
+  // head
+  ctx.fillStyle = skin;
+  ctx.beginPath(); ctx.arc(0,-s*0.68,s*0.43,0,TAU); ctx.fill();
+
+  // hair (jagged)
+  ctx.fillStyle = hair;
+  ctx.beginPath();
+  ctx.moveTo(-s*0.44,-s*0.83);
+  const hp=[[-s*.35,-s*1.22],[-s*.18,-s*.89],[-s*.02,-s*1.3],[s*.12,-s*.9],[s*.27,-s*1.18],[s*.41,-s*.85],[s*.44,-s*.83]];
+  for(const[hx,hy] of hp) ctx.lineTo(hx,hy);
+  ctx.fill();
+
+  if (!cm.scared) {
+    // angry eyes
+    ctx.fillStyle='#fff';
+    ctx.beginPath();ctx.arc(-s*.17,-s*.72,s*.12,0,TAU);ctx.fill();
+    ctx.beginPath();ctx.arc( s*.17,-s*.72,s*.12,0,TAU);ctx.fill();
+    ctx.fillStyle='#111';
+    ctx.beginPath();ctx.arc(-s*.14,-s*.71,s*.07,0,TAU);ctx.fill();
+    ctx.beginPath();ctx.arc( s*.2,-s*.71,s*.07,0,TAU);ctx.fill();
+    // angry brows
+    ctx.strokeStyle=hair; ctx.lineWidth=s*.1; ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(-s*.3,-s*.84);ctx.lineTo(-s*.07,-s*.8);ctx.stroke();
+    ctx.beginPath();ctx.moveTo( s*.3,-s*.84);ctx.lineTo( s*.07,-s*.8);ctx.stroke();
+    // grr mouth
+    ctx.lineWidth=s*.07;
+    ctx.beginPath();ctx.moveTo(-s*.16,-s*.5);ctx.lineTo(s*.16,-s*.5);ctx.stroke();
+
+    // arm with raised club
+    ctx.strokeStyle=skin; ctx.lineWidth=s*.22; ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(s*.42,-s*.22);ctx.lineTo(s*.78,-s*.88);ctx.stroke();
+    // club handle
+    ctx.strokeStyle='#5c3310'; ctx.lineWidth=s*.15;
+    ctx.beginPath();ctx.moveTo(s*.78,-s*.88);ctx.lineTo(s*.94,-s*1.5);ctx.stroke();
+    // club head
+    ctx.fillStyle='#7c4c20';
+    ctx.beginPath();ctx.arc(s*.99,-s*1.63,s*.29,0,TAU);ctx.fill();
+    // knobs on club
+    ctx.fillStyle='#a06030';
+    for(let i=0;i<5;i++){
+      const a=i*TAU/5;
+      ctx.beginPath();ctx.arc(s*.99+Math.cos(a)*s*.2,-s*1.63+Math.sin(a)*s*.2,s*.1,0,TAU);ctx.fill();
+    }
+    // off-arm (small)
+    ctx.strokeStyle=skin; ctx.lineWidth=s*.17;
+    ctx.beginPath();ctx.moveTo(-s*.4,-s*.22);ctx.lineTo(-s*.6,s*.08);ctx.stroke();
+
+  } else {
+    // scared: arms up, wide eyes, dropped club
+    ctx.strokeStyle=skin; ctx.lineWidth=s*.2; ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(-s*.36,-s*.2);ctx.lineTo(-s*.62,-s*.76);ctx.stroke();
+    ctx.beginPath();ctx.moveTo( s*.36,-s*.2);ctx.lineTo( s*.62,-s*.76);ctx.stroke();
+    // wide eyes
+    ctx.fillStyle='#fff';
+    ctx.beginPath();ctx.arc(-s*.17,-s*.72,s*.18,0,TAU);ctx.fill();
+    ctx.beginPath();ctx.arc( s*.17,-s*.72,s*.18,0,TAU);ctx.fill();
+    ctx.fillStyle='#111';
+    ctx.beginPath();ctx.arc(-s*.17,-s*.72,s*.09,0,TAU);ctx.fill();
+    ctx.beginPath();ctx.arc( s*.17,-s*.72,s*.09,0,TAU);ctx.fill();
+    // O mouth
+    ctx.fillStyle='#3d1a00';
+    ctx.beginPath();ctx.arc(0,-s*.5,s*.1,0,TAU);ctx.fill();
+    // dropped club on ground
+    ctx.save();
+    ctx.translate(s*.55, s*.88); ctx.rotate(0.4);
+    ctx.strokeStyle='#5c3310'; ctx.lineWidth=s*.12;
+    ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(0,s*.52);ctx.stroke();
+    ctx.fillStyle='#7c4c20';
+    ctx.beginPath();ctx.arc(0,s*.62,s*.2,0,TAU);ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+function drawRock(rock) {
+  ctx.save();
+  ctx.translate(rock.x, rock.y);
+  ctx.rotate((rock.life * 0.25) % TAU);
+  ctx.fillStyle = '#9ca3af';
+  ctx.beginPath();
+  // irregular rock polygon
+  ctx.moveTo(5,0); ctx.lineTo(3,-5); ctx.lineTo(-2,-5);
+  ctx.lineTo(-5,-2); ctx.lineTo(-5,3); ctx.lineTo(-1,5);
+  ctx.lineTo(4,4); ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle='#6b7280'; ctx.lineWidth=1; ctx.stroke();
+  ctx.restore();
+}
+
+function drawDeathBurst() {
+  const t = 1 - deathFrames/90;
+  ctx.save(); ctx.translate(player.x, player.y); ctx.globalAlpha = 1-t;
+  for (let i=0;i<8;i++){
+    const a=i*Math.PI/4;
+    const r=t*TILE*1.6;
+    ctx.strokeStyle=`hsl(${i*45},100%,60%)`;
+    ctx.lineWidth=3;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a)*TILE*.2, Math.sin(a)*TILE*.2);
+    ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawOverlay(title, sub, color) {
+  ctx.fillStyle='rgba(0,0,0,0.72)';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle = color || '#4ade80';
+  ctx.font='bold 38px "Courier New"';
+  ctx.fillText(title, canvas.width/2, canvas.height/2 - 22);
+  ctx.fillStyle='#aaa'; ctx.font='15px "Courier New"';
+  ctx.fillText(sub, canvas.width/2, canvas.height/2 + 22);
+  ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+}
+
+// ---- MAIN LOOP ----
+let lastTs = 0;
+function loop(ts) {
+  lastTs = ts;
+  pelletTick++;
+
+  ctx.fillStyle='#06060f';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  drawMaze();
+
+  if (state === 'playing') {
+    updatePlayer();
+    cavemen.forEach(updateCaveman);
+    updateRocks();
+    checkCaveman();
+    if (powerTimer > 0) {
+      powerTimer--;
+      if (powerTimer === 0) cavemen.forEach(cm=>{ cm.scared=false; });
+    }
+    drawDino(player.x, player.y, player.dir, player.chomp);
+    cavemen.forEach(cm => drawCaveman(cm));
+    rocks.forEach(drawRock);
+
+  } else if (state === 'death') {
+    deathFrames--;
+    drawDeathBurst();
+    cavemen.forEach(cm => drawCaveman(cm));
+    rocks.forEach(drawRock);
+    if (deathFrames <= 0) {
+      if (lives <= 0) { state='gameover'; }
+      else { resetRound(); }
+    }
+
+  } else if (state === 'levelwin') {
+    drawDino(player.x, player.y, player.dir, player.chomp);
+    cavemen.forEach(cm => drawCaveman(cm));
+    drawOverlay('LEVEL ' + level + '!', 'NICE CHOMPIN...', '#fde047');
+
+  } else if (state === 'gameover') {
+    drawDino(canvas.width/2, canvas.height/2 + 40, {dx:1,dy:0}, pelletTick%20);
+    drawOverlay('GAME OVER', 'PRESS ENTER TO RESTART', '#f87171');
+
+  } else if (state === 'title') {
+    // demo scene
+    drawDino(canvas.width/2 - TILE, canvas.height/2 + 20, {dx:1,dy:0}, pelletTick%20);
+    drawCaveman({x:canvas.width/2+TILE*3, y:canvas.height/2+20, scared:false, dead:false,
+                 skin:CM_SKIN[0], wobble:pelletTick, dir:{dx:-1,dy:0}});
+    drawOverlay('DINO-MAN', 'PRESS ENTER TO START', '#4ade80');
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// ---- START ----
+resizeCanvas();           // sets TILE/HALF and canvas size first
+initMaze(); initPlayer(); initCavemen(); rocks=[];
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
