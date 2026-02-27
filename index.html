@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>Dino-Man</title>
+<title>Dino Garden</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    background: #0a0a0a;
+    background: #0d1a0d;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -17,10 +17,10 @@
     color: #fff;
     user-select: none;
   }
-  h1 { font-size: 2rem; color: #4ade80; letter-spacing: 4px; margin-bottom: 8px; text-shadow: 0 0 20px #4ade80; }
-  #hud { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px 28px; margin-bottom: 8px; font-size: 0.9rem; letter-spacing: 2px; }
-  #hud span { color: #fde047; }
-  canvas { border: 2px solid #222; display: block; touch-action: none; }
+  h1 { font-size: 2rem; color: #f9e44d; letter-spacing: 4px; margin-bottom: 8px; text-shadow: 0 0 20px #f9e44d; }
+  #hud { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px 28px; margin-bottom: 8px; font-size: 0.9rem; letter-spacing: 2px; color: #c8e87a; }
+  #hud span { color: #f9e44d; }
+  canvas { border: 2px solid #3d7a28; display: block; touch-action: none; }
   #sub { margin-top: 8px; font-size: 0.75rem; color: #444; letter-spacing: 2px; }
   #dpad {
     display: grid;
@@ -30,22 +30,22 @@
     margin-top: 10px;
   }
   #dpad button {
-    background: rgba(255,255,255,0.1);
-    border: 2px solid #333;
+    background: rgba(45,90,27,0.45);
+    border: 2px solid #3d7a28;
     border-radius: 50%;
-    color: #fff;
+    color: #f9e44d;
     font-size: 1.4rem;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
     user-select: none;
   }
-  #dpad button:active { background: rgba(255,255,255,0.3); border-color: #4ade80; }
+  #dpad button:active { background: rgba(45,90,27,0.7); border-color: #f9e44d; }
   .dpad-blank { background: none; border: none; }
 </style>
 </head>
 <body>
-<h1>DINO-MAN</h1>
+<h1>DINO GARDEN</h1>
 <div id="hud">
   <div>SCORE: <span id="score">0</span></div>
   <div>BEST: <span id="best">0</span></div>
@@ -76,6 +76,11 @@ const WALL = 1, EMPTY = 0, DOT = 2, PELLET = 3;
 const PSPEED = 2, CSPEED = 1.4, ROCKSPD = 4;
 const POWER_FRAMES = 300;
 const TAU = Math.PI * 2;
+const THORN_DROP_CHANCE = 0.004;
+const THORN_MAX = 12;
+const THORN_LIFE = 400;
+const BONUS_INTERVAL = 480;
+const BONUS_DURATION = 350;
 
 // ---- CANVAS ----
 const canvas = document.getElementById('c');
@@ -126,6 +131,8 @@ let score = 0, best = 0, lives = 3, level = 1;
 let powerTimer = 0, pelletTick = 0, totalDots = 0;
 let state = 'title'; // title | playing | death | levelwin | gameover
 let deathFrames = 0;
+let thorns = [];
+let bonusItem = null, bonusTimer = BONUS_INTERVAL;
 
 // ---- HUD ----
 const $score = document.getElementById('score');
@@ -200,14 +207,10 @@ function tileAt(r, c) {
   return maze[r][c];
 }
 function walkable(r, c) { return tileAt(r, c) !== WALL; }
-// pixel coords -> tile index (player center-based)
 function tR(y) { return Math.floor(y / TILE); }
 function tC(x) { return Math.floor(x / TILE); }
-// snap pixel to nearest tile center
 function snap(v) { return Math.round((v - HALF) / TILE) * TILE + HALF; }
-// is pixel at a tile center (within PSPEED)
 function atSnap(v) { return ((v - HALF + TILE * 100) % TILE) < PSPEED; }
-// wrap horizontal tunnel
 function wrapX(x) {
   const W = COLS * TILE;
   if (x < -HALF) return x + W;
@@ -252,16 +255,18 @@ function initCavemen() {
 function startGame() {
   initMaze(); initPlayer(); initCavemen();
   rocks=[]; score=0; lives=3; level=1; powerTimer=0; pelletTick=0;
+  thorns=[]; bonusItem=null; bonusTimer=BONUS_INTERVAL;
   state='playing'; hud();
 }
 
 function resetRound() {
-  initPlayer(); initCavemen(); rocks=[]; powerTimer=0; state='playing';
+  initPlayer(); initCavemen(); rocks=[]; powerTimer=0;
+  thorns=[]; bonusItem=null; bonusTimer=BONUS_INTERVAL;
+  state='playing';
 }
 
 // ---- PLAYER MOVEMENT (tile-center snapping) ----
 function updatePlayer() {
-  // Poll held keys every frame for responsive turning
   for (const [k,d] of Object.entries(DIRS)) {
     if (keys[k]) { player.next = d; break; }
   }
@@ -273,11 +278,9 @@ function updatePlayer() {
     player.y = snap(player.y);
     const r = tR(player.y), c = tC(player.x);
 
-    // Try queued direction
     const n = player.next;
     if (walkable(r + n.dy, c + n.dx)) player.dir = {dx:n.dx, dy:n.dy};
 
-    // Stop if wall ahead
     const d = player.dir;
     if (!walkable(r + d.dy, c + d.dx)) { player.dir = {dx:0,dy:0}; return; }
   }
@@ -285,10 +288,8 @@ function updatePlayer() {
   player.x = wrapX(player.x + player.dir.dx * PSPEED);
   player.y += player.dir.dy * PSPEED;
 
-  // Chomp animation
   if (player.dir.dx || player.dir.dy) player.chomp = (player.chomp + 1) % 20;
 
-  // Eat
   const r = tR(player.y), c = tC(player.x);
   if (r>=0&&r<ROWS&&c>=0&&c<COLS) {
     if (maze[r][c] === DOT) {
@@ -297,12 +298,66 @@ function updatePlayer() {
       maze[r][c] = EMPTY; score += 50; totalDots--;
       powerTimer = POWER_FRAMES;
       rocks = [];
+      thorns = [];
       cavemen.forEach(cm => { if (!cm.dead) cm.scared = true; });
       hud();
     }
   }
 
+  // Check bonus item pickup
+  if (bonusItem) {
+    const bdx = bonusItem.x - player.x, bdy = bonusItem.y - player.y;
+    if (Math.sqrt(bdx*bdx+bdy*bdy) < TILE*0.6) {
+      score += bonusItem.pts;
+      bonusItem = null;
+      bonusTimer = BONUS_INTERVAL;
+      hud();
+    }
+  }
+
+  // Check thorn collisions
+  for (const thorn of thorns) {
+    const tdx = thorn.x - player.x, tdy = thorn.y - player.y;
+    if (Math.sqrt(tdx*tdx+tdy*tdy) < TILE*0.38) {
+      playerHit();
+      return;
+    }
+  }
+
   if (totalDots <= 0) nextLevel();
+}
+
+// ---- THORN UPDATE ----
+function updateThorns() {
+  for (let i=thorns.length-1; i>=0; i--) {
+    thorns[i].life--;
+    if (thorns[i].life <= 0) thorns.splice(i, 1);
+  }
+}
+
+// ---- BONUS UPDATE ----
+function updateBonus() {
+  if (bonusItem) {
+    bonusItem.timer--;
+    if (bonusItem.timer <= 0) { bonusItem = null; bonusTimer = BONUS_INTERVAL; }
+  } else {
+    bonusTimer--;
+    if (bonusTimer <= 0) spawnBonus();
+  }
+}
+
+function spawnBonus() {
+  const cells = [];
+  for (let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++)
+    if (maze[r][c]===EMPTY||maze[r][c]===DOT) cells.push({r,c});
+  if (cells.length === 0) return;
+  const cell = cells[Math.floor(Math.random()*cells.length)];
+  const type = Math.random() < 0.5 ? 'carrot' : 'egg';
+  bonusItem = {
+    x: cell.c*TILE+HALF, y: cell.r*TILE+HALF,
+    type, pts: type==='carrot' ? 300 : 500,
+    timer: BONUS_DURATION
+  };
 }
 
 // ---- CAVEMAN AI ----
@@ -350,6 +405,11 @@ function updateCaveman(cm) {
     cm.x = snap(cm.x); cm.y = snap(cm.y);
     cm.r = tR(cm.y); cm.c = tC(cm.x);
 
+    // Drop thorn
+    if (!cm.scared && thorns.length < THORN_MAX && Math.random() < THORN_DROP_CHANCE) {
+      thorns.push({ x: cm.x, y: cm.y, life: THORN_LIFE, phase: Math.random()*TAU });
+    }
+
     const opts = neighbors(cm.r, cm.c, cm.dir);
     if (opts.length === 0) { cm.dir={dx:-cm.dir.dx,dy:-cm.dir.dy}; return; }
 
@@ -361,7 +421,6 @@ function updateCaveman(cm) {
       cm.dir = opts.reduce((a,b)=>mdist(a.r,a.c,target.r,target.c)<mdist(b.r,b.c,target.r,target.c)?a:b);
     }
 
-    // Try to throw a rock
     if (!cm.scared && cm.rockCd <= 0) {
       const los = lineOfSight(cm);
       if (los) {
@@ -415,7 +474,9 @@ function nextLevel() {
   level++;
   state = 'levelwin';
   setTimeout(() => {
-    initMaze(); initPlayer(); initCavemen(); rocks=[]; powerTimer=0;
+    initMaze(); initPlayer(); initCavemen();
+    rocks=[]; powerTimer=0;
+    thorns=[]; bonusItem=null; bonusTimer=BONUS_INTERVAL;
     hud(); state='playing';
   }, 2200);
 }
@@ -425,33 +486,134 @@ function nextLevel() {
 // ============================================================
 
 function drawMaze() {
+  const bumpR = Math.max(2, TILE/10);
   for (let r=0;r<ROWS;r++) {
     for (let c=0;c<COLS;c++) {
       const x=c*TILE, y=r*TILE, cell=maze[r][c];
       if (cell === WALL) {
-        ctx.fillStyle = '#0e2244';
+        // Hedge base
+        ctx.fillStyle = '#1a3d0a';
         ctx.fillRect(x,y,TILE,TILE);
-        ctx.strokeStyle='#1d4ed8'; ctx.lineWidth=2;
+        // Hedge body
+        ctx.fillStyle = '#2d6e14';
+        ctx.fillRect(x+1,y+1,TILE-2,TILE-2);
+        // Circle bumps on exposed faces
         const sides=[
-          {dr:-1,dc:0,x1:x,y1:y,x2:x+TILE,y2:y},
-          {dr:1, dc:0,x1:x,y1:y+TILE,x2:x+TILE,y2:y+TILE},
-          {dr:0, dc:-1,x1:x,y1:y,x2:x,y2:y+TILE},
-          {dr:0, dc:1, x1:x+TILE,y1:y,x2:x+TILE,y2:y+TILE},
+          {dr:-1,dc:0,bx:x+HALF,by:y+bumpR},
+          {dr:1, dc:0,bx:x+HALF,by:y+TILE-bumpR},
+          {dr:0, dc:-1,bx:x+bumpR,by:y+HALF},
+          {dr:0, dc:1, bx:x+TILE-bumpR,by:y+HALF},
         ];
-        for(const s of sides){if(tileAt(r+s.dr,c+s.dc)!==WALL){ctx.beginPath();ctx.moveTo(s.x1,s.y1);ctx.lineTo(s.x2,s.y2);ctx.stroke();}}
+        ctx.fillStyle = '#3d8a1e';
+        for(const s of sides){
+          if(tileAt(r+s.dr,c+s.dc)!==WALL){
+            ctx.beginPath();
+            ctx.arc(s.bx, s.by, bumpR, 0, TAU);
+            ctx.fill();
+          }
+        }
       } else {
-        ctx.fillStyle='#06060f'; ctx.fillRect(x,y,TILE,TILE);
+        // Alternating dirt tiles
+        ctx.fillStyle = (r+c)%2===0 ? '#2a1608' : '#2e1a0a';
+        ctx.fillRect(x,y,TILE,TILE);
         if (cell===DOT) {
-          ctx.fillStyle='#fde047';
-          ctx.beginPath(); ctx.arc(x+HALF,y+HALF,2.5,0,TAU); ctx.fill();
+          // Flower: 4 petals + yellow center
+          const fx = x+HALF, fy = y+HALF;
+          const pr2 = TILE*0.1;
+          ctx.fillStyle = '#f9a8d4';
+          ctx.beginPath(); ctx.arc(fx, fy-pr2*1.6, pr2, 0, TAU); ctx.fill();
+          ctx.beginPath(); ctx.arc(fx, fy+pr2*1.6, pr2, 0, TAU); ctx.fill();
+          ctx.beginPath(); ctx.arc(fx+pr2*1.6, fy, pr2, 0, TAU); ctx.fill();
+          ctx.beginPath(); ctx.arc(fx-pr2*1.6, fy, pr2, 0, TAU); ctx.fill();
+          ctx.fillStyle = '#fde047';
+          ctx.beginPath(); ctx.arc(fx, fy, pr2, 0, TAU); ctx.fill();
         } else if (cell===PELLET && Math.sin(pelletTick*0.13)>0) {
-          ctx.fillStyle='#ff0'; ctx.shadowColor='#ff0'; ctx.shadowBlur=14;
-          ctx.beginPath(); ctx.arc(x+HALF,y+HALF,6.5,0,TAU); ctx.fill();
-          ctx.shadowBlur=0;
+          // Mushroom: red cap + white stem + 3 spots
+          const mx = x+HALF, my = y+HALF;
+          const ms = TILE * 0.32;
+          ctx.fillStyle = '#f0f0f0';
+          ctx.fillRect(mx-ms*0.35, my-ms*0.1, ms*0.7, ms*0.8);
+          ctx.fillStyle = '#dc2626';
+          ctx.beginPath();
+          ctx.arc(mx, my-ms*0.1, ms, Math.PI, 0);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.beginPath(); ctx.arc(mx, my-ms*0.6, ms*0.18, 0, TAU); ctx.fill();
+          ctx.beginPath(); ctx.arc(mx-ms*0.4, my-ms*0.2, ms*0.13, 0, TAU); ctx.fill();
+          ctx.beginPath(); ctx.arc(mx+ms*0.4, my-ms*0.2, ms*0.13, 0, TAU); ctx.fill();
         }
       }
     }
   }
+}
+
+function drawThorn(thorn) {
+  const pulse = 0.85 + Math.sin(pelletTick*0.12 + thorn.phase)*0.15;
+  const r = TILE * 0.3 * pulse;
+  const points = 8;
+  ctx.save();
+  ctx.translate(thorn.x, thorn.y);
+  ctx.fillStyle = '#5c1a1a';
+  ctx.beginPath();
+  for (let i=0; i<points*2; i++) {
+    const a = (i * Math.PI) / points;
+    const rad = i%2===0 ? r : r*0.45;
+    if (i===0) ctx.moveTo(Math.cos(a)*rad, Math.sin(a)*rad);
+    else ctx.lineTo(Math.cos(a)*rad, Math.sin(a)*rad);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBonus(item) {
+  if (!item) return;
+  const pulse = 0.9 + Math.sin(pelletTick*0.25)*0.1;
+  ctx.save();
+  ctx.translate(item.x, item.y);
+  ctx.scale(pulse, pulse);
+  if (item.type === 'carrot') {
+    // Orange triangle body
+    ctx.fillStyle = '#f97316';
+    ctx.beginPath();
+    ctx.moveTo(0, TILE*0.35);
+    ctx.lineTo(-TILE*0.22, -TILE*0.18);
+    ctx.lineTo(TILE*0.22, -TILE*0.18);
+    ctx.closePath();
+    ctx.fill();
+    // Green top leaves
+    ctx.fillStyle = '#4ade80';
+    ctx.beginPath();
+    ctx.moveTo(-TILE*0.14, -TILE*0.16);
+    ctx.lineTo(-TILE*0.06, -TILE*0.42);
+    ctx.lineTo(0, -TILE*0.18);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(TILE*0.14, -TILE*0.16);
+    ctx.lineTo(TILE*0.06, -TILE*0.42);
+    ctx.lineTo(0, -TILE*0.18);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(0, -TILE*0.16);
+    ctx.lineTo(0, -TILE*0.46);
+    ctx.lineTo(TILE*0.04, -TILE*0.16);
+    ctx.fill();
+  } else {
+    // Golden egg with glow shadow
+    ctx.shadowColor = '#fde047';
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#eab308';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, TILE*0.2, TILE*0.28, 0, 0, TAU);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // Shine
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(-TILE*0.05, -TILE*0.1, TILE*0.06, TILE*0.09, -0.5, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 // Draw a proper T-Rex facing RIGHT; we rotate/flip for other directions
@@ -459,21 +621,18 @@ function drawDino(x, y, dir, chomp) {
   ctx.save();
   ctx.translate(x, y);
 
-  // Transform based on direction
   if (dir.dx < 0) {
-    ctx.scale(-1, 1); // flip for left
+    ctx.scale(-1, 1);
   } else if (dir.dy < 0) {
-    ctx.rotate(-Math.PI/2); // up
+    ctx.rotate(-Math.PI/2);
   } else if (dir.dy > 0) {
-    ctx.rotate(Math.PI/2);  // down
+    ctx.rotate(Math.PI/2);
   }
-  // dir.dx > 0 or stationary: no transform
 
   const s = TILE * 0.44;
   const mouthOpen = Math.sin(chomp * Math.PI / 10) > 0;
   const jawY = mouthOpen ? s*0.28 : s*0.06;
 
-  // --- TAIL ---
   ctx.fillStyle = '#16a34a';
   ctx.beginPath();
   ctx.moveTo(-s*0.65, s*0.1);
@@ -482,7 +641,6 @@ function drawDino(x, y, dir, chomp) {
   ctx.closePath();
   ctx.fill();
 
-  // --- DORSAL SPIKES ---
   ctx.fillStyle = '#15803d';
   const spkX = [-s*0.55, -s*0.22, s*0.1, s*0.37];
   for (const bx of spkX) {
@@ -493,19 +651,16 @@ function drawDino(x, y, dir, chomp) {
     ctx.fill();
   }
 
-  // --- BODY ---
   ctx.fillStyle = '#4ade80';
   ctx.beginPath();
   ctx.ellipse(-s*0.1, s*0.06, s*0.75, s*0.52, 0, 0, TAU);
   ctx.fill();
 
-  // belly
   ctx.fillStyle = '#86efac';
   ctx.beginPath();
   ctx.ellipse(-s*0.05, s*0.18, s*0.4, s*0.3, 0, 0, TAU);
   ctx.fill();
 
-  // --- NECK ---
   ctx.fillStyle = '#4ade80';
   ctx.beginPath();
   ctx.moveTo(s*0.38, -s*0.3);
@@ -514,13 +669,11 @@ function drawDino(x, y, dir, chomp) {
   ctx.quadraticCurveTo(s*0.52, -s*0.1, s*0.38, -s*0.3);
   ctx.fill();
 
-  // --- UPPER JAW ---
   ctx.fillStyle = '#4ade80';
   ctx.beginPath();
   ctx.ellipse(s*0.9, -s*0.67, s*0.42, s*0.26, -0.18, 0, TAU);
   ctx.fill();
 
-  // upper teeth
   ctx.fillStyle = '#e5e7eb';
   for (let i=0; i<4; i++) {
     const tx = s*0.62 + i*s*0.18;
@@ -531,19 +684,16 @@ function drawDino(x, y, dir, chomp) {
     ctx.fill();
   }
 
-  // nostril
   ctx.fillStyle = '#16a34a';
   ctx.beginPath();
   ctx.arc(s*1.26, -s*0.65, s*0.065, 0, TAU);
   ctx.fill();
 
-  // --- LOWER JAW (opens/closes) ---
   ctx.fillStyle = '#22c55e';
   ctx.beginPath();
   ctx.ellipse(s*0.84, -s*0.47 + jawY, s*0.36, s*0.16, 0.15, 0, TAU);
   ctx.fill();
 
-  // lower teeth (only when open)
   if (mouthOpen) {
     ctx.fillStyle = '#d1fae5';
     for (let i=0; i<3; i++) {
@@ -556,7 +706,6 @@ function drawDino(x, y, dir, chomp) {
     }
   }
 
-  // --- EYE ---
   ctx.fillStyle = '#fef9c3';
   ctx.beginPath();
   ctx.arc(s*0.78, -s*0.84, s*0.19, 0, TAU);
@@ -565,21 +714,17 @@ function drawDino(x, y, dir, chomp) {
   ctx.beginPath();
   ctx.arc(s*0.83, -s*0.82, s*0.11, 0, TAU);
   ctx.fill();
-  // slit pupil
   ctx.fillStyle = '#f97316';
   ctx.beginPath();
   ctx.ellipse(s*0.83, -s*0.82, s*0.04, s*0.09, 0, 0, TAU);
   ctx.fill();
-  // shine
   ctx.fillStyle='rgba(255,255,255,0.8)';
   ctx.beginPath();
   ctx.arc(s*0.79, -s*0.87, s*0.045, 0, TAU);
   ctx.fill();
 
-  // --- TINY T-REX ARM ---
   ctx.strokeStyle='#22c55e'; ctx.lineWidth=s*0.17; ctx.lineCap='round';
   ctx.beginPath(); ctx.moveTo(s*0.46, s*0.06); ctx.lineTo(s*0.68, s*0.3); ctx.stroke();
-  // claws
   ctx.lineWidth=s*0.09;
   ctx.beginPath(); ctx.moveTo(s*0.68,s*0.3); ctx.lineTo(s*0.61,s*0.42); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(s*0.68,s*0.3); ctx.lineTo(s*0.76,s*0.41); ctx.stroke();
@@ -587,7 +732,6 @@ function drawDino(x, y, dir, chomp) {
   ctx.restore();
 }
 
-// Draw caveman facing camera (front view) — flipped for leftward movement
 function drawCaveman(cm, overrideX, overrideY) {
   if (cm.dead) return;
   const cx = overrideX !== undefined ? overrideX : cm.x;
@@ -607,33 +751,27 @@ function drawCaveman(cm, overrideX, overrideY) {
   const fur   = flash ? '#aaa'     : '#5c3d1e';
   const hair  = flash ? '#eee'     : '#180a00';
 
-  // feet
   ctx.fillStyle = skin;
   ctx.beginPath(); ctx.ellipse(-s*0.22, s*0.92, s*0.17, s*0.1, -0.3, 0, TAU); ctx.fill();
   ctx.beginPath(); ctx.ellipse( s*0.22, s*0.92, s*0.17, s*0.1,  0.3, 0, TAU); ctx.fill();
 
-  // fur tunic body
   ctx.fillStyle = fur;
   ctx.beginPath();
   ctx.ellipse(0, s*0.18, s*0.52, s*0.7, 0, 0, TAU);
   ctx.fill();
 
-  // fur spots
   if (!flash) {
     ctx.fillStyle='#3d2810';
     const spots=[[-.28,-.22,.11],[.22,-.05,.1],[-.15,.32,.09],[.2,.28,.08]];
     for(const[sx,sy,sr] of spots){ctx.beginPath();ctx.arc(s*sx,s*sy,s*sr,0,TAU);ctx.fill();}
   }
 
-  // eyebrow ridge
   ctx.fillStyle = fur;
   ctx.beginPath(); ctx.ellipse(0,-s*0.88,s*0.38,s*0.1,0,0,TAU); ctx.fill();
 
-  // head
   ctx.fillStyle = skin;
   ctx.beginPath(); ctx.arc(0,-s*0.68,s*0.43,0,TAU); ctx.fill();
 
-  // hair (jagged)
   ctx.fillStyle = hair;
   ctx.beginPath();
   ctx.moveTo(-s*0.44,-s*0.83);
@@ -642,56 +780,44 @@ function drawCaveman(cm, overrideX, overrideY) {
   ctx.fill();
 
   if (!cm.scared) {
-    // angry eyes
     ctx.fillStyle='#fff';
     ctx.beginPath();ctx.arc(-s*.17,-s*.72,s*.12,0,TAU);ctx.fill();
     ctx.beginPath();ctx.arc( s*.17,-s*.72,s*.12,0,TAU);ctx.fill();
     ctx.fillStyle='#111';
     ctx.beginPath();ctx.arc(-s*.14,-s*.71,s*.07,0,TAU);ctx.fill();
     ctx.beginPath();ctx.arc( s*.2,-s*.71,s*.07,0,TAU);ctx.fill();
-    // angry brows
     ctx.strokeStyle=hair; ctx.lineWidth=s*.1; ctx.lineCap='round';
     ctx.beginPath();ctx.moveTo(-s*.3,-s*.84);ctx.lineTo(-s*.07,-s*.8);ctx.stroke();
     ctx.beginPath();ctx.moveTo( s*.3,-s*.84);ctx.lineTo( s*.07,-s*.8);ctx.stroke();
-    // grr mouth
     ctx.lineWidth=s*.07;
     ctx.beginPath();ctx.moveTo(-s*.16,-s*.5);ctx.lineTo(s*.16,-s*.5);ctx.stroke();
 
-    // arm with raised club
     ctx.strokeStyle=skin; ctx.lineWidth=s*.22; ctx.lineCap='round';
     ctx.beginPath();ctx.moveTo(s*.42,-s*.22);ctx.lineTo(s*.78,-s*.88);ctx.stroke();
-    // club handle
     ctx.strokeStyle='#5c3310'; ctx.lineWidth=s*.15;
     ctx.beginPath();ctx.moveTo(s*.78,-s*.88);ctx.lineTo(s*.94,-s*1.5);ctx.stroke();
-    // club head
     ctx.fillStyle='#7c4c20';
     ctx.beginPath();ctx.arc(s*.99,-s*1.63,s*.29,0,TAU);ctx.fill();
-    // knobs on club
     ctx.fillStyle='#a06030';
     for(let i=0;i<5;i++){
       const a=i*TAU/5;
       ctx.beginPath();ctx.arc(s*.99+Math.cos(a)*s*.2,-s*1.63+Math.sin(a)*s*.2,s*.1,0,TAU);ctx.fill();
     }
-    // off-arm (small)
     ctx.strokeStyle=skin; ctx.lineWidth=s*.17;
     ctx.beginPath();ctx.moveTo(-s*.4,-s*.22);ctx.lineTo(-s*.6,s*.08);ctx.stroke();
 
   } else {
-    // scared: arms up, wide eyes, dropped club
     ctx.strokeStyle=skin; ctx.lineWidth=s*.2; ctx.lineCap='round';
     ctx.beginPath();ctx.moveTo(-s*.36,-s*.2);ctx.lineTo(-s*.62,-s*.76);ctx.stroke();
     ctx.beginPath();ctx.moveTo( s*.36,-s*.2);ctx.lineTo( s*.62,-s*.76);ctx.stroke();
-    // wide eyes
     ctx.fillStyle='#fff';
     ctx.beginPath();ctx.arc(-s*.17,-s*.72,s*.18,0,TAU);ctx.fill();
     ctx.beginPath();ctx.arc( s*.17,-s*.72,s*.18,0,TAU);ctx.fill();
     ctx.fillStyle='#111';
     ctx.beginPath();ctx.arc(-s*.17,-s*.72,s*.09,0,TAU);ctx.fill();
     ctx.beginPath();ctx.arc( s*.17,-s*.72,s*.09,0,TAU);ctx.fill();
-    // O mouth
     ctx.fillStyle='#3d1a00';
     ctx.beginPath();ctx.arc(0,-s*.5,s*.1,0,TAU);ctx.fill();
-    // dropped club on ground
     ctx.save();
     ctx.translate(s*.55, s*.88); ctx.rotate(0.4);
     ctx.strokeStyle='#5c3310'; ctx.lineWidth=s*.12;
@@ -710,7 +836,6 @@ function drawRock(rock) {
   ctx.rotate((rock.life * 0.25) % TAU);
   ctx.fillStyle = '#9ca3af';
   ctx.beginPath();
-  // irregular rock polygon
   ctx.moveTo(5,0); ctx.lineTo(3,-5); ctx.lineTo(-2,-5);
   ctx.lineTo(-5,-2); ctx.lineTo(-5,3); ctx.lineTo(-1,5);
   ctx.lineTo(4,4); ctx.closePath();
@@ -753,7 +878,7 @@ function loop(ts) {
   lastTs = ts;
   pelletTick++;
 
-  ctx.fillStyle='#06060f';
+  ctx.fillStyle='#2a1608';
   ctx.fillRect(0,0,canvas.width,canvas.height);
   drawMaze();
 
@@ -761,11 +886,15 @@ function loop(ts) {
     updatePlayer();
     cavemen.forEach(updateCaveman);
     updateRocks();
+    updateThorns();
+    updateBonus();
     checkCaveman();
     if (powerTimer > 0) {
       powerTimer--;
       if (powerTimer === 0) cavemen.forEach(cm=>{ cm.scared=false; });
     }
+    thorns.forEach(drawThorn);
+    drawBonus(bonusItem);
     drawDino(player.x, player.y, player.dir, player.chomp);
     cavemen.forEach(cm => drawCaveman(cm));
     rocks.forEach(drawRock);
@@ -783,26 +912,26 @@ function loop(ts) {
   } else if (state === 'levelwin') {
     drawDino(player.x, player.y, player.dir, player.chomp);
     cavemen.forEach(cm => drawCaveman(cm));
-    drawOverlay('LEVEL ' + level + '!', 'NICE CHOMPIN...', '#fde047');
+    drawOverlay('GARDEN CLEAR!', 'NICE CHOMPIN...', '#fde047');
 
   } else if (state === 'gameover') {
     drawDino(canvas.width/2, canvas.height/2 + 40, {dx:1,dy:0}, pelletTick%20);
     drawOverlay('GAME OVER', 'PRESS ENTER TO RESTART', '#f87171');
 
   } else if (state === 'title') {
-    // demo scene
     drawDino(canvas.width/2 - TILE, canvas.height/2 + 20, {dx:1,dy:0}, pelletTick%20);
     drawCaveman({x:canvas.width/2+TILE*3, y:canvas.height/2+20, scared:false, dead:false,
                  skin:CM_SKIN[0], wobble:pelletTick, dir:{dx:-1,dy:0}});
-    drawOverlay('DINO-MAN', 'PRESS ENTER TO START', '#4ade80');
+    drawOverlay('DINO GARDEN', 'PRESS ENTER TO START', '#f9e44d');
   }
 
   requestAnimationFrame(loop);
 }
 
 // ---- START ----
-resizeCanvas();           // sets TILE/HALF and canvas size first
+resizeCanvas();
 initMaze(); initPlayer(); initCavemen(); rocks=[];
+thorns=[]; bonusItem=null; bonusTimer=BONUS_INTERVAL;
 requestAnimationFrame(loop);
 </script>
 </body>
